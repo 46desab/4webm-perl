@@ -64,7 +64,7 @@ Basic flags:
 
 * (experimental) `-t` changes the VP9 encoder to SVT-VP9. Requires SvtVp9EncApp in `$PATH` or locally. Skips two-pass encoding[^2]
 
-The help screen explains all flags and can be accessed via `$ ./4webm.plx --man`. A short help page can be accessed via `$ ./4webm.plx -h`.
+The help screen explains all flags and can be accessed via `$ ./4webm.plx --man`. A short help page can be accessed via `$ ./4webm.plx -h`. Further information on usage and technical aspects can be found in the [wiki](https://codeberg.org/based64/4webm-perl/wiki/Home).
 
 ## Default behaviour
 
