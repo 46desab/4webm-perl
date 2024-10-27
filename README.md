@@ -104,7 +104,7 @@ Install perl and cpan. Windows users can use both strawberry and activestate per
 Install following CPAN modules:
 
 ```bash
-$ cpan Getopt::Long Pod::Usage POSIX Term::ANSIColor File::Basename Env IPC::Run File::Copy PAR pp`
+$ cpan Getopt::Long Pod::Usage POSIX Term::ANSIColor File::Basename Env IPC::Run File::Copy PAR pp
 ```
 
 (on windows, additionally install `> cpan Win32::Console::ANSI`)
@@ -118,6 +118,7 @@ $ pp -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename
 
 (windows)
 ```bash
+> git apply 4webm-win.patch 
 > pp -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename -M Env -M IPC::Run -M File::Copy -M Win32::Console::ANSI -a "usage.pod;script\usage.pod" -o 4webm.exe 4webm.plx
 ```
 
