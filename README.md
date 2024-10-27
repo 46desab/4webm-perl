@@ -118,7 +118,6 @@ $ pp -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename
 
 (windows)
 ```bash
-> git apply 4webm-win.patch 
 > pp -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename -M Env -M IPC::Run -M File::Copy -M Win32::Console::ANSI -a "usage.pod;script\usage.pod" -o 4webm.exe 4webm.plx
 ```
 
