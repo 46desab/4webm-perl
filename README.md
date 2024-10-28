@@ -90,7 +90,7 @@ The pre-configured binaries include the [ffmpeg builds by BtbN](https://github.c
 
 ## Build instructions
 
-### Running the perl script
+### Perl script only
 
 ```bash
 git clone https://codeberg.org/based64/4webm-perl.git
@@ -99,12 +99,12 @@ chmod u+x 4webm.plx
 
 ### Building the portable binary
 
-Install perl and cpan. Windows users can use both strawberry and activestate perl.
+Install perl and cpan via your package manager (usually perl is already installed on most distributions). Windows users can choose between [Strawberry and ActiveState perl](https://www.perl.org/get.html).
 
 Install following CPAN modules:
 
 ```bash
-$ cpan Getopt::Long Pod::Usage POSIX Term::ANSIColor File::Basename Env IPC::Run File::Copy PAR pp
+cpan Getopt::Long Pod::Usage POSIX Term::ANSIColor File::Basename Env IPC::Run File::Copy PAR pp
 ```
 
 (on windows, additionally install `> cpan Win32::Console::ANSI`)
@@ -113,13 +113,16 @@ Pack the binary:
 
 (linux)
 ```bash
-$ pp -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename -M Env -M IPC::Run -M File::Copy -a "usage.pod;script/usage.pod" -o 4webm 4webm.plx
+pp -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename -M Env -M IPC::Run -M File::Copy -a "usage.pod;script/usage.pod" -o 4webm 4webm.plx
 ```
 
 (windows)
+
+Patch `4webm.plx` with `4webm-win.patch`.
+
 ```bash
-> pp -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename -M Env -M IPC::Run -M File::Copy -M Win32::Console::ANSI -a "usage.pod;script\usage.pod" -o 4webm.exe 4webm.plx
-```
+pp -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename -M Env -M IPC::Run -M File::Copy -M Win32::Console::ANSI -a "usage.pod;script\usage.pod" -o 4webm.exe 4webm.plx
+``` 
 
 The wiki will be expanded to reflect these instructions, and to better illustrate the behaviour of the script including any limitations (e.g. Windows doesn't work well with most unicode file names).
 
