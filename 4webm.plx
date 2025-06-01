@@ -9,12 +9,20 @@ use warnings;
 
 use Getopt::Long;
 use Pod::Usage qw(pod2usage);
-use POSIX qw(strftime floor);
+use POSIX qw(strftime ceil floor);
 use Term::ANSIColor;
 use File::Basename;
 use Env;
-use IPC::Run qw(run timeout);
+use IPC::Run qw(run);
 use File::Copy;
+use Cwd qw(abs_path);
+#use Win32::Console::ANSI;
+
+use LWP::UserAgent;
+use HTTP::Request;
+use JSON;
+
+use Time::HiRes qw(time);
 
 # Defaults
 
@@ -28,41 +36,39 @@ my $libcv = "libvpx-vp9";
 my $libca = "libopus";
 my $quality = "good";
 my $tune = 0;
-my $extra_args = my $svt_args = "";
+my $extra_args = "";
 my $LOWLIMIT = 10;
-my $OVERHEAD = 3;
+my $OVERHEAD = 7;
+my $audio_overhead = 3;
 
 # System variables
 
+my $library_path;
 my $ffmpeg;
 my $ffprobe;
-my $ffprobe_output;
 my $ffmpeg_path;
 my $os = $^O;
-my $dir;
 my $svtvp9;
+my $svt_path;
+my $dir = (-l __FILE__)? dirname(readlink(__FILE__)) : dirname(__FILE__);
+my $nul = ($os eq "MSWin32")? "NUL" : "/dev/null";
 
-$dir = (-l __FILE__)? dirname(readlink(__FILE__)) : dirname(__FILE__);
-
-#Packing all binaries into one, at the cost of having to unpack everything => first start-up always slow
-#$dir = "$ENV{PAR_TEMP}\\inc\\$dir";
-#vs.
-#Pack only the essentials, access the binaries in the PAR_PROGNAME directory => faster, but more files for user to manage.
 if ($ENV{PAR_0}) {
     my $env_dir = "$ENV{PAR_PROGNAME}";
-    $env_dir =~ s/\/\w+$//;
+    
+    if ($os eq "MSWin32") {
+	$env_dir =~ s/\\[\w\-\,\;\.\:\#\+\~\´\`\=\{\}\(\)\[\]\&\%\$\§\!]+\.exe$//;
+    }
+    else {
+	$env_dir =~ s/\/\w+$//;
+    }
+    
     $dir = "$env_dir/$dir";
-}
-
-if ($os eq "MSWin32") {
-    die "This version of 4webm-perl is not compatible with Windows. Please visit the github repository for 4webm-perl and download the correct version for your OS.\n";
-}
-elsif ($os ne "linux") {
-    die "Your operating system ($os) is currently not supported.";
 }
 
 # Global variables
 
+my $ffprobe_output;
 my $duration;
 my $file_size_limit;
 my $max_dur;
@@ -75,43 +81,50 @@ my @end;
 my $bitrate;
 my $user_keyspace;
 my $input;
+my $svt_args = "";
 our $infile;
-our $aspect;
-our $rc_mode;
+our $aspect = "";
+my $rc_mode;
 my $speed;
-my $keep_raw;
+my $keep = 0;
 my $crop_reference;
-my $orig_framerate;
 my $framerate;
+my @orig_framerate;
 my $h_resolution;
 my $v_resolution;
 my $h_limit_resolution = my $v_limit_resolution = 2048;
 our $outfile;
-my $date = strftime "%d%b%Y_%H-%M-%S", localtime;
 my $force;
 my $break_limits;
 my $break_duration;
-our $q_value = 55;
+my $audio_recog;
+our $q_value = 55; #unused
 our $encoder_option = "none";
-
+my $audident;
+my $vidident;
+my $randomise;
+my $debug;
 my $pod = my $man = 0;
 
 GetOptions(
     'audio|a:f' => \&setAudio,
     'autocrop:f' => \&setAutoCrop,
     'board|b=s@' => \$board,
+    'debug|d' => \$debug,
     'end|e=s' => \$etime,
     'force|f' => \$force,
-    'library|l=s' => \$ffmpeg_path,
-    'input|i=s' => \$input,
-    'keep' => \$keep_raw,
+    'library|l=s@' => \$library_path,
+    'input|i=s@' => \$input,
+    'keep' => \$keep,
     'keyframe=i' => \$user_keyspace,
     'legacy' => \&setEncoder,
     'margin|m=f' => \$margin,
     'output|o=s' => \$outfile,
     'quality|q=s' => \$quality,
     'q-value=i' => \$q_value,
+    'random' => \$randomise,
     'rate-control=i' => \$rc_mode,
+    'recognise|recognize|r' => \$audio_recog,
     'remove-limits' => \$break_limits,
     'remove-duration' => \$break_duration,
     'start|s=s' => \$stime,
@@ -124,24 +137,53 @@ GetOptions(
     'man' => \$man
     ) or die colored(["red"],"Unrecognised option(s)!")," You can access the help/usage screen by using -h\n";
 
-die colored(["red"], "Insufficient arguments!")," Type 4webm -h for a short usage screen.\nExiting...\n" unless ($input || $pod || $man);
+die colored(["red"], "Insufficient arguments!")," Type 4webm -h for a short usage screen.\nExiting...\n" unless (@$input[0] || $pod || $man);
 
 pod2usage(-sections => "SYNOPSIS", -input => "$dir/usage.pod") if $pod;
 pod2usage(-perldocopt => "-o man",-verbose => 2, -input => "$dir/usage.pod") if $man;
 
-die colored(["red"],"Input file/directory not found or empty!"),"\n" unless (-f $input || -s $input || -d $input);
-die colored(["red"],"File not found!")," Check file handle.\n" if (-f $input && $input !~ m/\.\w{2,4}$/);
+die colored(["red"],"Input file/directory not found or empty!"),"\n" unless (-f @$input[0] || -s @$input[0] || -d @$input[0]);
+die colored(["red"],"File not found!")," Check file handle.\n" if (-f @$input[0] && @$input[0] !~ m/\.\w{2,4}$/);
+
+if (@$library_path[0]) {
+    if (scalar @$library_path == 1) {
+	if (-e "@$library_path[0]/ffmpeg") {
+	    $ffmpeg_path = @$library_path[0];
+	}
+	elsif (-e "@$library_path[0]/SvtVp9EncApp") {
+	    $svt_path = @$library_path[0];
+	}
+	else {
+	    die colored(["red"],"Unrecognised library")," Check if directory contains ffmpeg/SvtVp9EncApp.\n";
+	}
+    }
+    elsif (scalar @$library_path == 2) {
+	if (-e "@$library_path[0]/ffmpeg" && -e "@$library_path[1]/SvtVp9EncApp") {
+	    $ffmpeg_path = @$library_path[0];
+	    $svt_path = @$library_path[1];
+	}
+	elsif (-e "@$library_path[0]/SvtVp9EncApp" && -e "@$library_path[1]/ffmpeg") {
+	    $svt_path = @$library_path[0];
+	    $ffmpeg_path = @$library_path[1];
+	}
+	else {
+	    die colored(["red"],"Unrecognised library")," Check if directories contain ffmpeg/SvtVp9EncApp.\n";
+	}
+    }
+}
 
 $ffmpeg = "ffmpeg";
 $ffprobe = "ffprobe";
+
 if ($ffmpeg_path) {
-    print "Specified ffmpeg \$DIR = $ffmpeg_path";
+    print "Specified ffmpeg \$DIR = $ffmpeg_path\n";
     $ffmpeg = "$ffmpeg_path/ffmpeg";
     $ffprobe = "$ffmpeg_path/ffprobe";
 }
 else {
     for my $path (split(":", $ENV{PATH})) {
 	if (-f "$path/$ffmpeg" && -x _) {
+	    print "Found ffmpeg in $path/$ffmpeg\n" if ($debug);
 	    $ffmpeg = "ffmpeg";
 	    $ffprobe = "ffprobe";
 	    $ffmpeg_path = "$path/$ffmpeg";
@@ -149,23 +191,39 @@ else {
 	}
     }
     unless ($ffmpeg_path) {
-	print "ffmpeg not found in \$PATH nor specified with --library\nUsing bundled executables.\n";
+	print "ffmpeg not found in \$PATH nor specified with --library\nUsing bundled executables.\n" if ($debug);
 	$ffmpeg = "$dir/ffmpeg/bin/ffmpeg";
 	$ffprobe = "$dir/ffmpeg/bin/ffprobe";
     }
 }
-$svtvp9 = "$dir/SVT-VP9/SvtVp9EncApp";
 
-sub exitScript {
-    exit($_[0]) unless ($force);
+$svtvp9 = "SvtVp9EncApp";
+
+if ($svt_path) {
+    print "Specified SvtVp9EncApp \$DIR = $svt_path\n";
+    $svtvp9 = "$ffmpeg_path/SvtVp9EncApp";
+}
+else {
+    for my $path (split(":", $ENV{PATH})) {
+	if (-f "$path/$svtvp9" && -x _) {
+	    print "Found SvtVp9EncApp in $path/$svtvp9\n" if ($debug);
+	    $svtvp9 = "SvtVp9EncApp";
+	    $svt_path = "$path/$svtvp9";
+	    last;
+	}
+    }
+    unless ($svt_path) {
+	print "SvtVp9EncApp not found in \$PATH nor specified with --library\nUsing bundled executables.\n" if ($debug);
+	$svtvp9 = "$dir/SVT-VP9/SvtVp9EncApp";
+    }
 }
 
 sub getOutfile {
-    my $infile = shift;
-    unless ($outfile) {
-	($outfile) = $infile =~ m/(.*)\.\w{2,4}/s;
-	$outfile = "$outfile\_$date";
-    }
+    my $infile = $_[0];
+    my $no_date = $_[1];
+    my $date = strftime "%d%b%Y_%H-%M-%S", localtime;
+    ($outfile) = $infile =~ m/(.*)\.\w{2,4}/s;
+    $outfile = "$outfile\_$date" unless ($no_date);
     return $outfile;
 }
 
@@ -182,6 +240,10 @@ sub proceed {
 	print "Re-encoding audio\n";
 	encodeAudio("$outfile" . ".webm");
     }
+    elsif (($affirm eq "y" || $affirm eq "Y") && $encoder_option eq "music") {
+	print "Encoding\n";
+	encodeMusic(@$input[1]);
+    }
     elsif(($affirm eq "y" || $affirm eq "Y") && $libcv eq "svt-vp9") {
 	print "Encoding\n";
 	encodeSvtVp9();
@@ -191,8 +253,7 @@ sub proceed {
 	encode();
     }
     else {
-	print colored(["yellow"],"\nExiting..."),"\n";
-	exitScript(1);
+	die colored(["yellow"],"\nExiting..."),"\n";
     }
 }
 
@@ -223,7 +284,7 @@ sub encode {
     }
 	
     print colored(["magenta"],"\nPass 1/2:"),"\n";
-    qx($ffmpeg -hide_banner -loglevel error -stats -i "$infile" $stime $etime -c:v $libcv -b:v "$bitrate"K $keyspace $keyintmin -pass 1 -quality good -speed 4 $extra_args -an -f rawvideo -y /dev/null);
+    qx($ffmpeg -hide_banner -loglevel error -stats -i "$infile" $stime $etime -c:v $libcv -b:v "$bitrate"K $keyspace $keyintmin -pass 1 -quality good -speed 4 $extra_args -an -f rawvideo -y $nul);
     print colored(["magenta"],"\nPass 2/2:"),"\n";
     qx($ffmpeg -hide_banner -loglevel error -stats -i "$infile" $stime $etime -c:v $libcv -b:v "$bitrate"K $keyspace $keyintmin -pass 2 -quality $quality -speed $speed $extra_args $audio_opts -row-mt 1 -map_metadata -1 -y "$outfile".webm);
     unlink "ffmpeg2pass-0.log";
@@ -238,9 +299,25 @@ sub encodeAudio {
     qx($ffmpeg -hide_banner -loglevel error -stats -i "$audio_file" -i "$infile"_audio.opus -c:v copy $audio_opts -map 0:v:0 $arg2 $aspect -map 1:a:0 -shortest -map_metadata -1 -y "$outfile"_remux.webm);
     unlink "$infile\_audio.opus";
 }
-    
+
+sub demuxAudio {
+    my $audio_type = shift;
+    print colored(["magenta"],"Demuxing audio stream 1/1:"),"\n";
+    qx($ffmpeg -hide_banner -loglevel error -stats -i "$infile" -vn -c:a copy -map_metadata -1 "$outfile"."$audio_type");
+}
+
+sub encodeMusic {
+    my $cover = shift;
+    print colored(["magenta"],"Transcoding audio 1/1:"),"\n";
+    if ($cover) {
+	qx($ffmpeg -hide_banner -loglevel error -stats -i "$infile" -i "$cover" -map 1:v:0 -pix_fmt yuv420p -c:v libvpx-vp9 -r 1 -map 0:a:0 -c:a libopus -b:a "$bitrate"K -map_metadata -1 -y "$outfile".webm);
+    }
+    else {
+	qx($ffmpeg -hide_banner -loglevel error -stats -i "$infile" -pix_fmt yuv420p -c:v libvpx-vp9 -r 1 -c:a libopus -b:a "$bitrate"K -map_metadata -1 -y "$outfile".webm);
+    }
+}
+
 sub encodeSvtVp9 {
-    
     $bitrate = floor($bitrate * 1000);
     
     unless ($rc_mode) {
@@ -251,10 +328,8 @@ sub encodeSvtVp9 {
     my $max_rate = $bitrate * 1.25;
     my $buf_size = $bitrate * 0.25;
     my $keyspace = ($framerate == 29.97 || $framerate == 59.94)? 239 : $framerate * 8 - 1;
-    my $numerator = $framerate * 100;
-    my $denominator = 100;
 
-    if ($user_keyspace) {
+    if ($user_keyspace && $user_keyspace < 256) {
 	$keyspace = $user_keyspace - 1;
     }
     elsif ($break_limits) {
@@ -274,10 +349,10 @@ sub encodeSvtVp9 {
     }
     
     print colored(["magenta"],"\nDemuxing, Stage 1/2:"),"\n";
-    run("$ffmpeg -hide_banner -loglevel error -stats -i \"$infile\" -pix_fmt yuv420p $stime $etime $extra_args -y raw.yuv") unless (-e "raw.yuv" && $keep_raw);
+    run("$ffmpeg -hide_banner -loglevel error -stats -i \"$infile\" -pix_fmt yuv420p $stime $etime $extra_args -y raw.yuv") unless (-e "raw.yuv" && $keep);
     print colored(["magenta"],"\nEncoding, Stage 2/2:"),"\n";
-    run("$svtvp9 -i raw.yuv -w $h_resolution -h $v_resolution -intra-period $keyspace -fps-num $numerator -fps-denom $denominator -rc $rc_mode -tbr $bitrate -min-qp 0 -max-qp 60 -tune $tune -enc-mode $speed \"$svt_args\" -b \"$outfile.ivf\"");
-    unlink "raw.yuv" unless ($keep_raw);
+    run("$svtvp9 -i raw.yuv -w $h_resolution -h $v_resolution -intra-period $keyspace -fps-num $orig_framerate[0] -fps-denom $orig_framerate[1] -rc $rc_mode -tbr $bitrate -min-qp 0 -max-qp 60 -tune $tune -enc-mode $speed \"$svt_args\" -b \"$outfile.ivf\"");
+    unlink "raw.yuv" unless ($keep);
 
     if ($audio) {
 	print "\n",colored(["magenta"],"Muxing audio"),"\n";
@@ -323,6 +398,39 @@ sub removeDuration {
     close $webm_fh;
 }
 
+sub postAudio {
+    my $form_type = $_[0];
+    my $file = $_[1];
+    my $returns = $_[2];
+    my $token;
+    if (-e "$dir/api_token.txt") {
+	my $token_fh;
+	
+	open($token_fh,'<',"$dir/api_token.txt") or die "Can't open file $!\n";
+	$token = <$token_fh>;
+	chomp $token;
+	close($token_fh);
+    }
+    else {
+	$token = 'test';
+	print "Using test api token. While free and perpetual, it is rate limited.\n";
+	print "You may provide your own api token by writing it into a file called api_token.txt\n";
+    }
+    
+    my $ua = LWP::UserAgent->new(protocols_allowed => ['https']);
+    
+    my $response = $ua->post('https://api.audd.io/', "Content-Type"=>'form-data',"Content"=>[$form_type=>["$file"],return=>"$returns",api_token=>"$token"],);
+    die $response->status_line unless $response->is_success;
+    
+    my $response_content = $response->content;
+    my $decoded = decode_json($response_content);
+    die "Song not found or rate limited.\n" unless $decoded->{'result'};
+    
+    print "Song Name: ",$decoded->{'result'}{'title'},"\n";
+    print "by: ",$decoded->{'result'}{'artist'},"\n";
+    print "Album: ",$decoded->{'result'}{'album'},"\n";
+}
+
 sub checkFileSize {
     my $outfile_size = -s $_[0];
     $outfile_size = $outfile_size / 2**20;
@@ -333,7 +441,7 @@ sub checkFileSize {
 	print "\nThe output file size is: ",colored(["red"],"$outfile_size")," MiB, which is larger than the max. permissible filesize of $file_size_limit MiB\n";
 	
 	if ($audio) {
-	    $arate_adjust = $arate_adjust - $nominal_rate - 1;
+	    $arate_adjust = floor($arate_adjust - $nominal_rate);
 	    
 	    if ($arate_adjust > 32 && $libcv ne "svt-vp9") {
 		$audio_opts = "-c:a $libca -b:a " . $arate_adjust . "K";
@@ -341,15 +449,13 @@ sub checkFileSize {
 		proceed("fix");
 	    }
 	    else {
-		$margin = $margin + $nominal_rate + 1;
+		$margin = ceil($margin + $nominal_rate);
 		print colored(["yellow"],"Fix attempt not possible.")," resulting audio bitrate would drop below threshold of 32 kbps. Rerun with \"--margin $margin\".\n";
-		exitScript(2);
 	    }
 	}
 	else {
-	    $margin = $margin + $nominal_rate + 1;
+	    $margin = ceil($margin + $nominal_rate);
 	    print "Rerunning with \"--margin $margin\" may bring the file size back within limits.\n";
-	    exitScript(2);
 	}
     }
     elsif ($outfile_size == 0) {
@@ -358,7 +464,7 @@ sub checkFileSize {
     else {
 	my $delta = $file_size_limit - $outfile_size;
 	($bitrate,$c_bitrate,$nominal_rate) = $delta->$eq_bitrate;
-	$margin = $margin - $nominal_rate + 1;
+	$margin = ceil($margin - $nominal_rate);
 	print "\nThe output file size is: ",colored(["green"],"$outfile_size")," MiB\n";
 	
 	if ($nominal_rate > $LOWLIMIT && $outfile_size != 0) {    
@@ -366,9 +472,7 @@ sub checkFileSize {
 	    if ($libcv eq "svt-vp9") {
 		print "This is advisable for SVT-VP9 encoded media, if the output file size is significantly below limits.\n";
 	    }
-	    exitScript(2);
 	}
-	exitScript(0);
     }
 }
 
@@ -399,7 +503,7 @@ sub setEncoder {
 	$libca = "libvorbis";
     }
     elsif ($_[0] eq "svt-vp9") {
-	$OVERHEAD = 5;
+	$OVERHEAD = 9;
 	$libcv = "svt-vp9";
     }
 }
@@ -408,7 +512,7 @@ sub setEncoder {
 
 if (@$board[0] eq "wsg") {
     $file_size_limit = 6;
-    $max_dur = 300;
+    $max_dur = 400;
     $board_audio = @$board[1] // 1;
 }
 elsif (@$board[0] eq "b" || @$board[0] eq "bant") {
@@ -419,7 +523,7 @@ elsif (@$board[0] eq "b" || @$board[0] eq "bant") {
 elsif (@$board[0] eq "gif" || @$board[0] eq "wsr") {
     $file_size_limit = 4;
     $max_dur = 120;
-    $board_audio = @$board[1] // 0;
+    $board_audio = @$board[1] // 1;
 }
 elsif (@$board[0] =~ m/custom/i) {
     $file_size_limit = @$board[1];
@@ -449,56 +553,73 @@ else {
     $board_audio = @$board[1] // 0;
 }
 
-sub getProbe {
+sub getJsonProbe {
     my $probe_file = shift;
-    return qx($ffprobe -hide_banner -stats -i "$probe_file" 2>&1);
+    my $probe_output = qx($ffprobe -v quiet -print_format json -show_format -show_streams -i "$probe_file" 2>&1);
+    $probe_output = decode_json($probe_output);
+    
+    if ($probe_output->{'streams'}[0]{'codec_type'} eq "audio") {
+	$audident = 0;
+	$vidident = 1;
+    }
+    else {
+	$audident = 1;
+	$vidident = 0;
+    }
+    
+    return $probe_output;
 }
 
 sub getFramecount {
     my $framecount = qx(ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$infile" 2>&1);
-    return ($orig_framerate == $framerate)? $framecount : floor($framecount * $framerate / $orig_framerate);
+    return $framecount;
 }
 
 sub checkAudio {
-if ($audio && $board_audio) {
-    $audio_state = "true";
-    $audio_opts = "-c:a $libca -b:a " . $arate_adjust . "K";
-    ($arate) = $ffprobe_output =~ m/^.*fltp, (\d+)/s;
-    unless ($arate) {
-	$arate = 128;
+    my $ffprobe_output = shift;
+    if ($audio && $board_audio) {
+	$audio_state = "true";
+	$audio_opts = "-c:a $libca -b:a " . $arate_adjust . "K";
+	$arate = $ffprobe_output->{'streams'}[$audident]{'bit_rate'};
+	$arate = $ffprobe_output->{'format'}{'bit_rate'} unless $arate;
+	$arate = $arate/1000;
     }
-}
-elsif ($audio) {
-    die colored(["red"],"\nBoard limit:")," The selected board does not support audio. Change board, disable audio or force encoding by setting -b/--board @$board,1\n";
-}
-
+    elsif ($audio) {
+	die colored(["red"],"\nBoard limit:")," The selected board does not support audio. Change board, disable audio or force encoding by setting -b/--board @$board,1\n";
+    }   
 }
 
 sub getDuration {
     my $ffprobe_output = shift;
     my $duration;
-    my ($ffprobe_duration) = $ffprobe_output =~ m/^.*Duration: (\d+:\d+:\d+\.\d+)/s;
-    my @ffprobe_tdur = split(/:/,$ffprobe_duration);
-    $ffprobe_duration = 3600 * $ffprobe_tdur[0] + 60 * $ffprobe_tdur[1] + $ffprobe_tdur[2];
+    my $ffprobe_duration = $ffprobe_output->{'streams'}[$vidident]{'duration'};
+    $ffprobe_duration = $ffprobe_output->{'format'}{'duration'} unless $ffprobe_duration;
     
     if ($stime && $etime) {
 	@start = split(/:/,$stime);
 	@end = split(/:/,$etime);
-	$duration = 3600 * ($end[0] - $start[0]) + 60 * ($end[1] - $start[1]) + ($end[2] - $start[2]);
+	@start = reverse(@start);
+	@end = reverse(@end);
+	push(@start,0,0);
+	push(@end,0,0);
+	$duration = ($end[0] - $start[0]) + 60 * ($end[1] - $start[1]) + 3600 * ($end[2] - $start[2]);
 	$stime = "-ss $stime";
 	$etime = "-to $etime";
     }
     elsif (defined $stime && not defined $etime) {
 	@start = split(/:/,$stime);
-	@end = @ffprobe_tdur;
-	$duration = 3600 * ($end[0] - $start[0]) + 60 * ($end[1] - $start[1]) + ($end[2] - $start[2]);
+	@start = reverse(@start);
+	push(@start,0,0);
+	my $end = $ffprobe_duration;
+	$duration = $end - ($start[0]  + 60 * $start[1] + 3600 * $start[2]);
 	$stime = "-ss $stime";
 	$etime = "";
     }
     elsif (defined $etime && not defined $stime) {
-	@start = (0,0,0.0);
 	@end = split(/:/,$etime);
-	$duration = 3600 * ($end[0] - $start[0]) + 60 * ($end[1] - $start[1]) + ($end[2] - $start[2]);
+	@end = reverse(@end);
+	push(@end,0,0);
+	$duration = $end[0] + 60 * $end[1] + 3600 * $end[2];
 	$stime = "";
 	$etime = "-to $etime";
     }
@@ -522,75 +643,111 @@ sub getDuration {
 
 sub setBitrateGeneric {
     (my $ffprobe_output, my $target, my $duration, my $overhead) = @_;
-    (my $c_bitrate) = $ffprobe_output =~ m/^.*bitrate: (\d+)/s;
+    my $c_bitrate = $ffprobe_output->{'format'}{'bit_rate'};
+    $c_bitrate = $c_bitrate/1000;
     my $nominal_rate = getBitrate($target,$duration);
-    my $nominal_rate_adj = $nominal_rate - $arate_adjust;
+    my $nominal_rate_adj = floor($nominal_rate - $arate_adjust);
     
-    my $bitrate = ($nominal_rate < $c_bitrate)? $nominal_rate_adj - $margin - $overhead : $c_bitrate - $margin;
+    my $bitrate = ($nominal_rate < ($c_bitrate + $overhead + 1))? $nominal_rate_adj - $margin - $overhead : $c_bitrate - $margin;
+    return ($bitrate,$c_bitrate,$nominal_rate);
+}
+
+sub setBitrateAudio {
+    (my $ffprobe_output, my $target, my $duration, my $audio_overhead) = @_;
+    my $c_bitrate = $ffprobe_output->{'format'}{'bit_rate'};
+    $c_bitrate = $c_bitrate/1000;
+    my $nominal_rate = getBitrate($target,$duration);
+    my $video_adjust = 8 * 100/$duration;
+    my $nominal_rate_adj = floor($nominal_rate - $video_adjust);
+
+    my $bitrate = ($nominal_rate < ($c_bitrate + $audio_overhead + 1))? $nominal_rate_adj - $margin - $audio_overhead : $c_bitrate - $margin;
     return ($bitrate,$c_bitrate,$nominal_rate);
 }
 
 sub setFramerate {
-    ($orig_framerate) = $ffprobe_output =~ m/(\d+\.?\d+) tbr/;
-    unless ($orig_framerate) {
-	($orig_framerate) = $ffprobe_output =~ m/(\d+\.?\d+) fps/;
-    }
+    my $ffprobe_output = shift;
+    my $r_framerate = $ffprobe_output->{'streams'}[$vidident]{'r_frame_rate'};
+    @orig_framerate = split("/",$r_framerate);
     
     if ($extra_args =~ m/fps/) {
 	($framerate) = $extra_args =~ m/fps=(\d+(\.\d+)?)/;
+	$orig_framerate[0] = $framerate * 100;
+	$orig_framerate[1] = 100;
     }
     else {
-	$framerate = $orig_framerate;
+	$framerate = $orig_framerate[0]/$orig_framerate[1];
     }
 }
 
 sub checkResolution {
-my @resolution  = $ffprobe_output =~ m/(\d{2,4})x(\d{2,4})/;
-$h_resolution = $resolution[0];
-$v_resolution = $resolution[1];
-my $aspect_ratio = $h_resolution/$v_resolution;
-
-if ($extra_args =~ m/scale=/sg) {
-    my @scale_resolution = $extra_args =~ m/scale=(-?\d+):(-?\d+)/;
-    ($aspect) = $extra_args =~ m/(-aspect \d+:\d+)/;
+    my $ffprobe_output = shift;
+    my @aspect_fraction;
+    my $aspect_ratio;
+    $h_resolution = $ffprobe_output->{'streams'}[$vidident]{'width'};
+    $v_resolution = $ffprobe_output->{'streams'}[$vidident]{'height'};
+    my $sar = $ffprobe_output->{'streams'}[$vidident]{'sample_aspect_ratio'};
+    my $dar = $ffprobe_output->{'streams'}[$vidident]{'display_aspect_ratio'};
     
-    if ($scale_resolution[0] =~ m/^-/) {
-	$v_resolution = $scale_resolution[1];
-	$h_resolution = $v_resolution * $aspect_ratio;
-    }
-    elsif ($scale_resolution[1] =~ m/^-/) {
-	$h_resolution = $scale_resolution[0];
-	$v_resolution = $h_resolution / $aspect_ratio;
+    unless ($sar && $dar) {
+	$aspect_ratio = $h_resolution/$v_resolution;
     }
     else {
-	$h_resolution = $scale_resolution[0];
-	$v_resolution = $scale_resolution[1];
-    }
-}
-elsif ($extra_args =~ m/crop=/sg) {
-    my @crop_resolution = $extra_args =~ m/crop=(-?\d+):(-?\d+)(:\d+)?(:\d+)?/;
-    
-    if ($crop_resolution[0] =~ m/^-/) {
-	$v_resolution = $crop_resolution[1];
-	$h_resolution = $v_resolution * $aspect_ratio;
-    }
-    elsif ($crop_resolution[1] =~ m/^-/) {
-	$h_resolution = $crop_resolution[0];
-	$v_resolution = $h_resolution / $aspect_ratio;
-    }
-    else {
-	$h_resolution = $crop_resolution[0];
-	$v_resolution = $crop_resolution[1];
-    }
-}
+	@aspect_fraction = split(":",$sar);
 
-if ($h_resolution > $h_limit_resolution || $v_resolution > $v_limit_resolution) {
-    die "The video resolution exceeds the maximum of ",colored(["yellow"],"2048x2048"),". Please scale or crop the input via -ex/--extra.\n";
-}
+	unless ($h_resolution/$v_resolution == $aspect_fraction[0]/$aspect_fraction[1]) {
+	    @aspect_fraction = split(":",$dar);
+	}
+	$aspect_ratio = $aspect_fraction[0]/$aspect_fraction[1];
+    }
 
-if ($libcv eq "svt-vp9" && ($h_resolution % 8 != 0 || $v_resolution % 8 != 0)) {
-    $libcv = "libvpx-vp9";
-}
+    if ($extra_args =~ m/scale=/sg) {
+	my @scale_resolution = $extra_args =~ m/scale=(-?\d+):(-?\d+)/;
+	($aspect) = $extra_args =~ m/(-aspect \d+:\d+)/;
+	
+	if ($scale_resolution[0] =~ m/^-/) {
+	    $v_resolution = $scale_resolution[1];
+	    $h_resolution = $v_resolution * $aspect_ratio;
+	}
+	elsif ($scale_resolution[1] =~ m/^-/) {
+	    $h_resolution = $scale_resolution[0];
+	    $v_resolution = $h_resolution / $aspect_ratio;
+	}
+	else {
+	    $h_resolution = $scale_resolution[0];
+	    $v_resolution = $scale_resolution[1];
+	}
+    }
+    elsif ($extra_args =~ m/crop=/sg) {
+	my @crop_resolution = $extra_args =~ m/crop=(-?\d+):(-?\d+)(:\d+)?(:\d+)?/;
+	
+	if ($crop_resolution[0] =~ m/^-/) {
+	    $v_resolution = $crop_resolution[1];
+	    $h_resolution = $v_resolution * $aspect_ratio;
+	}
+	elsif ($crop_resolution[1] =~ m/^-/) {
+	    $h_resolution = $crop_resolution[0];
+	    $v_resolution = $h_resolution / $aspect_ratio;
+	}
+	else {
+	    $h_resolution = $crop_resolution[0];
+	    $v_resolution = $crop_resolution[1];
+	}
+    }
+
+    if ($h_resolution > $h_limit_resolution || $v_resolution > $v_limit_resolution) {
+	die "The video resolution exceeds the maximum of ",colored(["yellow"],"2048x2048"),". Please scale or crop the input via -ex/--extra.\n";
+    }
+
+    if ($libcv eq "svt-vp9" && ($h_resolution % 8 != 0 || $v_resolution % 8 != 0)) {
+	$libcv = "libvpx-vp9";
+    }
+
+    my $rotation = $ffprobe_output->{'streams'}[$vidident]{'side_data_list'}[0]{'rotation'};
+
+    if ($rotation) {
+	print "Rotation detected: ",$rotation," degrees.\n";
+	print "It may be necessary to add -vf transpose=2 to --extra\n";
+    }
 }
 
 sub setOptimisations {
@@ -602,6 +759,20 @@ sub setOptimisations {
 	    $speed = 1;
 	}
     }    
+}
+
+sub randomName {
+    my @nums = ('0'..'9');
+    my $random_name = '17';
+    (my $suffix) = $infile =~ m/\.\w{1,4}/;
+    
+    do {
+	foreach (1..14) {
+	    $random_name = $random_name.$nums[rand(@nums)];
+	}
+    } while(-e "$random_name.$suffix");
+    
+    return $random_name;
 }
     
 sub printMediaInfo {
@@ -621,7 +792,7 @@ print <<EOF;
 VIDEO DURATION:			$duration s
 VIDEO CODEC:			$libcv
 SELECTED RESOLUTION:		$h_resolution x $v_resolution
-VIDEO FRAMERATE:		$framerate fps
+VIDEO FRAMERATE:		$orig_framerate[0]/$orig_framerate[1] approx. $framerate fps
 CURRENT TOTAL BITRATE:		$c_bitrate kbps
 MAX. PERMISSIBLE BITRATE: 	$nominal_rate kbps
 SELECTED VIDEO BITRATE:		$bitrate kbps
@@ -629,7 +800,7 @@ EOF
 if ($extra_args) {
     print "FFMPEG ARGUMENTS:		$extra_args\n";
 }
-if ($break_limits || $user_keyspace) {
+elsif ($break_limits || $user_keyspace) {
     print "FRAME COUNT:                    ",getFramecount(),"\n";
 }
 print <<EOF;
@@ -639,36 +810,147 @@ print color("reset");
 }
 
 sub convertFile {
-    $outfile = getOutfile($infile);
-    $ffprobe_output = getProbe($infile);
-    checkAudio();
+    if ($randomise) {
+	$outfile = randomName();
+    }
+    else {
+	$outfile = getOutfile($infile,0) unless ($outfile);
+    }
+    
+    $ffprobe_output = getJsonProbe($infile);
+    checkAudio($ffprobe_output);
     $duration = getDuration($ffprobe_output);
     ($bitrate,$c_bitrate,$nominal_rate) = $file_size_limit->$eq_bitrate;
     getAutoCrop if ($crop_reference);
-    setFramerate();
-    checkResolution();
+    setFramerate($ffprobe_output);
+    checkResolution($ffprobe_output);
     setOptimisations();
     printMediaInfo();
     proceed($encoder_option);
 }
 
-if (-d $input) {
-    undef $outfile;
+sub convertMusic {
+    my $cover = shift;
     
-    opendir(input_dir,"$input");
-    my @media_files = readdir(input_dir);
-    closedir(input_dir);
+    if ($randomise) {
+	$outfile = randomName();
+    }
+    else {
+	$outfile = getOutfile($infile,0) unless ($outfile);
+    }
     
-    foreach $infile (@media_files) {
-	next if ($infile !~ m/\.(mp4|mkv|webm|mov|3gp|avi|flv|f4v|mpeg|ogg|wmv|yuv|gif)$/ || $infile =~ m/^\.+$/);
-	$infile = ($input =~ m/\/$/)? $input . $infile : "$input/$infile";
-	convertFile();
+    $ffprobe_output = getJsonProbe($infile);
+    my $ffprobe_output_cover = getJsonProbe($cover) if $cover;
+    checkAudio($ffprobe_output);
+    $duration = getDuration($ffprobe_output);
+    ($bitrate,$c_bitrate,$nominal_rate) = setBitrateAudio($ffprobe_output, $file_size_limit, $duration, $audio_overhead);
+    $orig_framerate[0] = $orig_framerate[1] = $framerate = 1;
+    
+    if ($cover) {
+	checkResolution($ffprobe_output_cover);
+    }
+    else {
+	checkResolution($ffprobe_output);
+    }
+    
+    $arate_adjust = $bitrate;
+    printMediaInfo();
+    proceed("music");
+}
+
+sub recogniseAudio {
+    my $audio_path;
+    my $audio_type;
+    $outfile = randomName() unless ($outfile);
+    
+    my $decode_probe = getJsonProbe($infile);
+    my $codec_name = $decode_probe->{'streams'}[$audident]{'codec_name'};
+    
+    if ($codec_name eq "aac") {
+	$audio_type = "m4a";
+    }
+    elsif ($codec_name eq "mp3") {
+	$audio_type = "mp3";
+    }
+    elsif ($codec_name eq "opus") {
+	$audio_type = "opus";
+    }
+    elsif ($codec_name eq "vorbis") {
+	$audio_type = "ogg";
+    }
+    else {
+	die "Invalid audio stream. Container not supported or corrupt";
+    }
+    
+    demuxAudio($audio_type);
+    $audio_path = abs_path("$outfile.$audio_type");
+    
+    postAudio('file',"$audio_path",'spotify','');
+    unlink "$outfile.$audio_type" if (-e "$outfile.$audio_type" && $keep == 0);
+}
+
+my $in_length = scalar @$input;
+my $music_mode;
+
+unless ($in_length > 2) {
+    if (@$input[0] =~ m/\.(mp3|m4a|flac|wav|aiff)/) {
+	$music_mode = 1;
+    }
+    elsif (@$input[0] =~ m/\.(mp3|m4a|flac|wav|aiff)/ && @$input[1] =~ m/\.(jpg|jpeg|jfif|png)/) {
+	$music_mode = 1;
+    }
+    elsif (@$input[0] =~ m/\.(jpg|jpeg|jfif|png)/ && @$input[1] =~ m/\.(mp3|m4a|flac|wav|aiff)/) {
+	@$input = reverse(@$input);
+	$music_mode = 1;
+    }
+}
+
+foreach my $inarg (@$input) {
+    if (-d $inarg) {
+	undef $outfile;
+	
+	opendir(input_dir,"$inarg");
+	my @media_files = readdir(input_dir);
+	closedir(input_dir);
+	
+	foreach $infile (@media_files) {
+	    next if ($infile !~ m/\.(mp4|mkv|webm|mov|3gp|avi|flv|f4v|mpeg|ogg|wmv|yuv|gif)$/ || $infile =~ m/^\.+$/);
+	    $infile = ($inarg =~ m/\/$/)? $inarg . $infile : "$inarg/$infile";
+	    
+	    my $t0 = time;
+	    convertFile();
+	    my $t1 = time;
+	    my $delta_t = sprintf("%.3f",$t1-$t0);
+	    print "\n--------------------------------\nTime elapsed: ",$delta_t," s\n";
+	    
+	    undef $speed;
+	    undef $outfile;
+	    $margin = 0;
+	}
+    }
+    elsif (-f $inarg) {
+	undef $outfile if ($in_length > 1);
+	$infile = $inarg;
+	
+	if ($break_duration) {
+	    removeDuration("$infile");
+	}
+	elsif ($audio_recog) {
+	    recogniseAudio("$infile");
+	}
+	elsif ($music_mode) {
+	    convertMusic(@$input[1]);
+	    last;
+	}
+	else {
+	    my $t0 = time;
+	    convertFile();
+	    my $t1 = time;
+	    my $delta_t = sprintf("%.3f",$t1-$t0);
+	    print "\n--------------------------------\nTime elapsed: ",$delta_t," s\n";
+	}
 	undef $speed;
 	undef $outfile;
 	$margin = 0;
     }
-}
-elsif (-f $input) {
-    $infile = $input;
-    ($break_duration)? removeDuration("$infile") : convertFile();
 }

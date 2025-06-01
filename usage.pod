@@ -18,17 +18,21 @@ $./4webm -i|--input INPUT [options] [arguments]
    -au   | --autocrop     enables automatic cropping
    -b    | --board	  board name
    -e    | --end          end point
+   -f    | --force        skips confirmation dialogue
    -i    | --input	  (REQUIRED!) input file name
-   -l    | --library      path to ffmpeg
+   -k    | --keep         keeps intermediate outputs
+   -l    | --library      path to ffmpeg or SvtVp9EncApp
    -le   | --legacy       selects VP8+VORBIS
    -m    | --margin 	  margin value
    -o    | --output       output file name
    -q    | --quality	  quality value
+   -r    | --recognise    song finder/audio recognition
+   -ra   | --random       randomise file name
    -s    | --start	  start point
    -t    | --svt-vp9	  SVT-VP9 encoder
    -v    | --speed	  speed value
    -x    | --extra	  extra ffmpeg arguments
-   -ex   | --extra-svt    extra SVT-VP9 arguments
+         | --extra-svt    extra SVT-VP9 arguments
 
 =head1 OPTIONS
 
@@ -45,9 +49,9 @@ Prints this page and exits.
 =item B<--input>
 
 REQUIRED!
-Specifies the input file to be used, output file name will be "inputfilename_DATE_TIME.webm"
+Specifies the input file to be used, output file name will be "inputfilename_DATE_TIME.webm". Multiple input files and folders can be specified at once. 
 
-EXAMPLE: -i inputfilename.mp4
+EXAMPLE: -i inputfilename.mp4 or -i input1.mp4 -i input2.mov -i ./inputfolder1
 	  
 =item B<--audio>
 
@@ -88,14 +92,15 @@ EXAMPLE: --board custom,12,600,1,4096x4096 or -b custom -b 12 -b 600 -b 1 -b 409
 =item B<--end>
 
 These flags can be used to specify start and/or end times for the input file. Similar to FFMPEG's "-ss" and "-to".
+Format hh:mm:ss.ms, but can be shortened beginning with ss, e.g. ss.ms or mm:ss.ms
 
 DEFAULT: (full media length)
 
-EXAMPLE: -s 00:01:12.690
+EXAMPLE: -s 12.690
 
          -e 00:05:30.000
 
-         --start 00:00:15.000 --end 00:02:20.000
+         --start 00:00:15.000 --end 2:20.000
 
 =item B<--legacy>
 
@@ -107,16 +112,16 @@ EXAMPLE: -le, --legacy
 
 =item B<--library>
 
-Can be used to point to a custom FFMPEG location. Takes priority over the included binaries and any binaries found in $PATH
+Can be used to point to a custom FFMPEG and SVT-VP9 location. Takes priority over the included binaries and any binaries found in $PATH
 Assumes that both FFMPEG and FFPROBE are in the same directory!
 
 DEFAULT: ($PATH or included binaries)
 
-EXAMPLE: -l /path/to/ffmpeg_folder, --library C:\path\to\ffmpeg_folder
+EXAMPLE: -l /path/to/ffmpeg_folder, --library C:\path\to\ffmpeg_folder --library C:\path\to\svtvp9_folder
 
 =item B<--keep>
 
-Forces the script to keep the yuv output of the demuxing stage for SVT-VP9. Suggested when SVT-VP9 is hanging and needs multiple restarts.
+Forces the script to keep intermediate outputs. Suggested when SVT-VP9 is hanging and needs multiple restarts.
 
 DEFAULT: OFF
 EXAMPLE: --keep
@@ -155,6 +160,24 @@ Sets the "-quality" flag of libvpx-vp9. Does nothing for VP8.
 DEFAULT: good
 
 EXAMPLE: -q best
+
+=item B<--random>
+
+Randomises output file name in a 4chan-style format.
+
+DEFAULT:
+
+EXAMPLE: -ra
+
+=item B<--recognise>
+
+Demuxes audio from input and sends it off to a third party website (audd.io) for audio recognition. A public API token is provided,
+but in case of rate limitation, users may provide their own by creating a file called "api_token.txt" in the root directory
+with the api token in plain text. Please refer to audd.io's privacy policy in order to know how the data is handled.
+
+DEFAULT:
+
+EXAMPLE: -r
 
 =item B<--svt-vp9>
 

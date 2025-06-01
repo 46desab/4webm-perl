@@ -6,13 +6,13 @@
 
 ### Linux
 
-Just chuck it into a dedicated script folder (ideally in `$PATH`) or have it in any folder that contains media to be converted and make it executable (`$ chmod u+x 4webm.plx`). Alternatively, [download the pre-configured binary](https://codeberg.org/based64/4webm-perl/releases). (Or use [my bash script](https://www.codeberg.org/based64/4webm "4webm-bash"))
+Just chuck it into a dedicated script folder (ideally in `$PATH`) or have it in any folder that contains media to be converted and make it executable (`$ chmod u+x 4webm.plx`), make sure to get all required modules via cpan. Alternatively, [download the pre-configured binary](https://codeberg.org/based64/4webm-perl/releases). (Or use [my bash script](https://www.codeberg.org/based64/4webm "4webm-bash"))
 
-Requirements: perl (should be installed by default on most distros), ffmpeg, SVT-VP9 (optional)
+Requirements: perl (should be installed by default on most distributions), ffmpeg, SVT-VP9 (optional)
 
 ### Windows
 
-**With perl installed:** Just chuck it into a dedicated script folder (ideally in `$PATH`) or have it in any folder that contains media to be converted. Run the script with `> perl 4webm.plx`.
+**With perl installed:** Just chuck it into a dedicated script folder (ideally in `$PATH`) or have it in any folder that contains media to be converted and get all required modules via cpan. Run the script with `> perl 4webm.plx`.
 
 Requirements: perl, ffmpeg, SVT-VP9 (optional)
 
@@ -29,9 +29,9 @@ $ ./4webm.plx -i input.mp4
 ```
 or
 ```bash
-$ ./4webm.plx -i ~/path/to/your/files
+$ ./4webm.plx -i ~/path/to/your/files -i another_file.mp4 -i ~/path/to/another/folder
 ```
-Unless the script is batch converting or the `-o` flag is set, the output file name will default to `inputfilename_DATE_TIME.webm`. If a different max. file size, duration and audio compatibility is desired, specify a board and enable the audio flag:
+Unless the script is batch converting or the `-o` or `--randomise` flag is set, the output file name will default to `inputfilename_DATE_TIME.webm`. If a different max. file size, duration and audio compatibility is desired, specify a board and enable the audio flag:
 
 ```bash
 $ ./4webm.plx -i input.mp4 -b wsg -a
@@ -72,21 +72,23 @@ The script determines a suitable total bitrate for a two pass encoding and addit
 
 The script also suggests a value for the margin setting `-m`, should the output be above/significantly below board limits. Alternatively, if audio was enabled, a lower audio bitrate is determined which reduces the file size (this option only re-encodes audio and is thus significantly faster than re-encoding the video again). 
 
-There are currently no flags to optimise for bandwidth or storage space, this can be worked around by setting a high margin `-m` or setting the target board to /bant/: `-b bant` (2MiB limit).
+There are currently no flags to optimise for bandwidth or storage space, this can be worked around by setting a high margin `-m` or using a custom board setting `-b custom`.
 
 When running in batch mode, any flags that control media parameters will affect all files equally.
 
 ## Alternative encoder: SVT-VP9
 
-Running the script with `-t` enabled sets the VP9 encoder to SVT-VP9. Optimisations for SvtVp9EncApp are automatically determined. Using SVT-VP9 instead of libvpx-vp9 will result in a significant encoding speed boost of **10x-100x** (depending on `-v` setting and system specs). Tradeoffs are a *reduction* in *compression efficiency* and *visual quality* at lower bitrates. Additionally, only a single pass can be made, which is less efficient than a two-pass approach.
+Running the script with `-t` enabled sets the VP9 encoder to SVT-VP9. Optimisations for SvtVp9EncApp are automatically determined. Using SVT-VP9 instead of libvpx-vp9 will result in a significant encoding speed boost of **2x-100x** (depending on `-v` setting and system specs). Tradeoffs are a *reduction* in *compression efficiency* and *visual quality* at lower bitrates. Additionally, only a single pass can be made, which is less efficient than a two-pass approach.
 
-SVT-VP9 tends to produce files with bitrates slightly below the target bitrate, which means that multiple passes with different margin settings may be advisable in order to achieve the highest possible quality (a tradeoff for the high encoding speed).
-
-A precompiled static binary (for linux x86-64) is supplied in the folder SVT-VP9 with its accompanying licence and notices. These binaries are supplied as is.
+A precompiled static binary (for linux x86-64 and windows x86-64) is supplied in the folder SVT-VP9 with its accompanying licence and notices. These binaries are supplied as is.
 
 The binaries are compiled with AVX2 support. If AVX2 isn't supported on your system, it may be advisable to recompile SVT-VP9 locally. Please check [the official SVT-VP9 repository](https://github.com/OpenVisualCloud/SVT-VP9) for more information.
 
 The pre-configured binaries include the [ffmpeg builds by BtbN](https://github.com/BtbN/FFmpeg-Builds) with its accompanying licences and notices.
+
+## Audio recognition
+
+4webm also provides a basic audio recognition option. It utilises [audd.io](https://audd.io/) for this function. This function is provided as is, audd.io's privacy policy is applicable to any audio that is processed via their API. Activated by appending `-r` or `--recognise` to the arguments.
 
 ## Build instructions
 
@@ -97,6 +99,8 @@ git clone https://codeberg.org/based64/4webm-perl.git
 chmod u+x 4webm.plx
 ```
 
+Followed by installing the required modules.
+
 ### Building the portable binary
 
 Install perl and cpan via your package manager (usually perl is already installed on most distributions). Windows users can choose between [Strawberry and ActiveState perl](https://www.perl.org/get.html).
@@ -104,28 +108,30 @@ Install perl and cpan via your package manager (usually perl is already installe
 Install following CPAN modules:
 
 ```bash
-cpan Getopt::Long Pod::Usage POSIX Term::ANSIColor File::Basename Env IPC::Run File::Copy PAR pp
+cpan Getopt::Long Pod::Usage POSIX Term::ANSIColor File::Basename Env IPC::Run File::Copy JSON PAR LWP::UserAgent HTTP::Request pp App::PP::Autolink
 ```
 
 (on windows, additionally install `> cpan Win32::Console::ANSI`)
 
-Pack the binary:
+Pack the binary:[^3]
 
 (linux)
 ```bash
-pp -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename -M Env -M IPC::Run -M File::Copy -a "usage.pod;script/usage.pod" -o 4webm 4webm.plx
+pp_autolink -l /usr/lib64/perl5/vendor_perl/5.40/x86_64-linux/auto/Net/SSLeay/SSLeay.so -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename -M Env -M IPC::Run -M Cwd -M File::Copy -M LWP::UserAgent -M LWP::Protocol::https -M HTTP::Request -M JSON -o 4webm 4webm.plx
 ```
 
 (windows)
 
-Patch `4webm.plx` with `4webm-win.patch`.
+Uncomment `use Win32::Console::ANSI;` in `4webm.plx` line 19.
 
 ```bash
-pp -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename -M Env -M IPC::Run -M File::Copy -M Win32::Console::ANSI -a "usage.pod;script\usage.pod" -o 4webm.exe 4webm.plx
-``` 
+pp_autolink -l C:\Strawberry\perl\vendor\lib\auto\Net\SSLeay\SSLeay.xs.dll -l C:\Strawberry\perl\vendor\lib\auto\Crypt\SSLeay\SSLeay.xs.dll -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename -M Env -M IPC::Run -M Cwd -M File::Copy -M Win32::Console::ANSI -M LWP::UserAgent -M LWP::Protocol::https -M HTTP::Request -M JSON -o 4webm.exe 4webm.plx
+```
 
-The wiki will be expanded to reflect these instructions, and to better illustrate the behaviour of the script including any limitations (e.g. Windows doesn't work well with most unicode file names).
+(Limitation: Windows doesn't work well with most unicode file names).
 
 [^1]: Currently, a positive margin value reduces the total bitrate, while a negative value increases it. This should probably be changed, but for now, it'll work.
 
 [^2]: SVT-VP9 has a known bug which causes the encoder to simply freeze. Stopping the script and re-running it fixes this. Specifying `--keep` will prevent the script from discarding the raw yuv file and skip the demuxing step.
+
+[^3]: The locations for SSLeay.so/SSLeay.xs.dll specified in these commands are exemplary and should work as long as the modules have been installed into their default locations. If this is not the case on the build system, these need to be changed to point to the correct location.
