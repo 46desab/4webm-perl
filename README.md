@@ -2,6 +2,11 @@
 
 4webm-perl: A simple 4chan .webm conversion script.
 
+## TLDR
+
+[Download binary](https://codeberg.org/based64/4webm-perl/releases)
+Unpack archive and invoke via terminal/cmd. Optionally, add to PATH.
+
 ## "Installation"
 
 ### Linux
@@ -39,7 +44,7 @@ $ ./4webm.plx -i input.mp4 -b wsg -a
 A "complete" example:
 
 ```bash
-$ ./4webm.plx -i input.mp4 -b wsg -a 128 -m 10 -q best -v 0 -s 00:00:10.500 -e 00:01:19.690 -x "-vf eq=saturation=1.1,scale=-1:720 -aspect 16:9"
+$ ./4webm.plx -i input.mp4 -b wsg -a 128 -m 10 -q best -v 0 -s 10.500 -e 1:19.690 -x "-vf eq=saturation=1.1,scale=-1:720 -aspect 16:9"
 ```
 
 Or running in "batch mode":
@@ -124,7 +129,7 @@ pp_autolink -l /usr/lib64/perl5/vendor_perl/5.40/x86_64-linux/auto/Net/SSLeay/SS
 
 Uncomment `use Win32::Console::ANSI;` in `4webm.plx` line 19.
 
-```bash
+```bat
 pp_autolink -l C:\Strawberry\perl\vendor\lib\auto\Net\SSLeay\SSLeay.xs.dll -l C:\Strawberry\perl\vendor\lib\auto\Crypt\SSLeay\SSLeay.xs.dll -M Getopt::Long -M Pod::Usage -M POSIX -M Term::ANSIColor -M File::Basename -M Env -M IPC::Run -M Cwd -M File::Copy -M Win32::Console::ANSI -M LWP::UserAgent -M LWP::Protocol::https -M HTTP::Request -M JSON -o 4webm.exe 4webm.plx
 ```
 

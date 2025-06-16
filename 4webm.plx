@@ -112,12 +112,15 @@ GetOptions(
     'board|b=s@' => \$board,
     'debug|d' => \$debug,
     'end|e=s' => \$etime,
+    'extra|x=s' => \$extra_args,
+    'extra-svt=s' => \$svt_args,
     'force|f' => \$force,
-    'library|l=s@' => \$library_path,
+    'ftplaylist' => \&getPlaylists,
     'input|i=s@' => \$input,
     'keep' => \$keep,
     'keyframe=i' => \$user_keyspace,
     'legacy' => \&setEncoder,
+    'library|l=s@' => \$library_path,
     'margin|m=f' => \$margin,
     'output|o=s' => \$outfile,
     'quality|q=s' => \$quality,
@@ -131,11 +134,9 @@ GetOptions(
     'svt-vp9|t' => \&setEncoder,
     'speed|v=i' => \$speed,
     'tune=i' => \$tune,
-    'extra|x=s' => \$extra_args,
-    'extra-svt=s' => \$svt_args,
-    'help' => \$pod,
+    'help|h|?' => \$pod,
     'man' => \$man
-    ) or die colored(["red"],"Unrecognised option(s)!")," You can access the help/usage screen by using -h\n";
+    ) or pod2usage(-sections => "SYNOPSIS", -input => "$dir/usage.pod");
 
 die colored(["red"], "Insufficient arguments!")," Type 4webm -h for a short usage screen.\nExiting...\n" unless (@$input[0] || $pod || $man);
 
@@ -431,6 +432,77 @@ sub postAudio {
     print "Album: ",$decoded->{'result'}{'album'},"\n";
 }
 
+sub getContent {
+    my $url = shift;
+    my $ua = LWP::UserAgent->new(protocols_allowed=>['https']);
+    my $response = $ua->get("$url");
+    die $response->status_line unless $response->is_success;
+
+    my $response_content = $response->content;
+    my $decoded = decode_json($response_content);
+    return $decoded;
+}
+
+sub getFTm3u8 {
+    my $json = getContent('https://api.fishtank.live/v1/live-streams');
+
+    my $cdn = $json->{'loadBalancer'}{'camera-1-4'};
+    my $streams = $json->{'liveStreams'};
+
+    open(my $fh,'>','playlist.m3u') or die "Could not create playlist.m3u\n";
+    print $fh "#EXTM3U\n";
+    
+    foreach my $i (0..(scalar(@$streams)-1)){
+        my $cam = $streams->[$i];
+	print $i,"\n" if $debug;
+	
+	my $id = $cam->{'id'};
+	my $name = $cam->{'name'};
+	my $suffix = $cam->{'jwt'};
+	unless ($suffix){
+	    $suffix = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIzNmU5YzA0Zi02OWU0LTQxZTMtYWY3OC1hZDJkZTNlOGM5ZWYiLCJsaXZlU3RyZWFtSWQiOiJjYW1lcmEtOS00IiwiaWF0IjoxNzUwMDkyNTM2LCJleHAiOjE3NTAxNzg5MzZ9.xQ3mNpY_VV6bd7bzXMGlPiyJB6YOXAXws-ONEWKNtV8';
+	}
+	my $link = "https://$cdn/hls/live+$id/index.m3u8?jwt=$suffix";
+	print $name,"\n",$link,"\n" if $debug;
+	
+	print $fh "#EXTINF:0, - $name\n";
+	print $fh $link,"\n";
+    }
+
+    close $fh;
+}
+
+sub getPPVm3u8 {
+    my $json = getContent('https://ppvs.su/fishtank.json');
+
+    my $streams = $json->{'streams'};
+
+    open(my $fh,'>','playlist_ppv.m3u') or die "Could not create playlist.m3u\n";
+    print $fh "#EXTM3U\n";
+
+    foreach my $i (0..(scalar(@$streams)-1)){
+	my $cam = $streams->[$i];
+	print $i,"\n" if $debug;
+
+	my $name = $cam->{'name'};
+	my $link = $cam->{'playlist'};
+	print $name,"\n",$link,"\n" if $debug;
+
+	print $fh "#EXTINF:0, - $name\n";
+	print $fh $link,"\n";
+    }
+
+    close $fh;
+}
+
+sub getPlaylists {
+    getFTm3u8;
+    print "Saving FT playlist as: playlist.m3u\n";
+    getPPVm3u8;
+    print "Saving PPV playlist as: playlist_ppv.m3u\n";
+    exit;
+}
+
 sub checkFileSize {
     my $outfile_size = -s $_[0];
     $outfile_size = $outfile_size / 2**20;
@@ -485,7 +557,7 @@ sub getAutoCrop {
     ($crop_detect) = $crop_detect =~ m/(crop=\d+:\d+:\d+:\d+)(?!.*crop=\d+:\d+:\d+:\d+)/s;
 
     if ($extra_args) {
-	$extra_args = $extra_args . "," . $crop_detect;
+	$extra_args = $extra_args . " -vf " . $crop_detect;
     }
     else {
 	$extra_args = "-vf " . $crop_detect;
@@ -762,6 +834,7 @@ sub setOptimisations {
 }
 
 sub randomName {
+    #imitate unix-style epoch
     my @nums = ('0'..'9');
     my $random_name = '17';
     (my $suffix) = $infile =~ m/\.\w{1,4}/;
