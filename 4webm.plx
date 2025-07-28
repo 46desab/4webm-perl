@@ -350,7 +350,7 @@ sub encodeSvtVp9 {
 	}
     }
 
-    if ($alt) {
+    unless ($alt) {
 	print colored(["magenta"],"\nDemuxing, Stage 1/2:"),"\n";
 	run("$ffmpeg -hide_banner -loglevel error -stats -i \"$infile\" -pix_fmt yuv420p $stime $etime $extra_args -y raw.yuv") unless (-e "raw.yuv" && $keep);
 	print colored(["magenta"],"\nEncoding, Stage 2/2:"),"\n";
