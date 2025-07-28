@@ -319,6 +319,7 @@ sub encodeMusic {
 }
 
 sub encodeSvtVp9 {
+    my $alt = $_[0];
     $bitrate = floor($bitrate * 1000);
     
     unless ($rc_mode) {
@@ -348,12 +349,18 @@ sub encodeSvtVp9 {
 	    $keyspace = "";
 	}
     }
-    
-    print colored(["magenta"],"\nDemuxing, Stage 1/2:"),"\n";
-    run("$ffmpeg -hide_banner -loglevel error -stats -i \"$infile\" -pix_fmt yuv420p $stime $etime $extra_args -y raw.yuv") unless (-e "raw.yuv" && $keep);
-    print colored(["magenta"],"\nEncoding, Stage 2/2:"),"\n";
-    run("$svtvp9 -i raw.yuv -w $h_resolution -h $v_resolution -intra-period $keyspace -fps-num $orig_framerate[0] -fps-denom $orig_framerate[1] -rc $rc_mode -tbr $bitrate -min-qp 0 -max-qp 60 -tune $tune -enc-mode $speed \"$svt_args\" -b \"$outfile.ivf\"");
-    unlink "raw.yuv" unless ($keep);
+
+    if ($alt) {
+	print colored(["magenta"],"\nDemuxing, Stage 1/2:"),"\n";
+	run("$ffmpeg -hide_banner -loglevel error -stats -i \"$infile\" -pix_fmt yuv420p $stime $etime $extra_args -y raw.yuv") unless (-e "raw.yuv" && $keep);
+	print colored(["magenta"],"\nEncoding, Stage 2/2:"),"\n";
+	run("$svtvp9 -i raw.yuv -w $h_resolution -h $v_resolution -intra-period $keyspace -fps-num $orig_framerate[0] -fps-denom $orig_framerate[1] -rc $rc_mode -tbr $bitrate -min-qp 0 -max-qp 60 -tune $tune -enc-mode $speed \"$svt_args\" -b \"$outfile.ivf\"");
+	unlink "raw.yuv" unless ($keep);
+    }
+    else {
+	my $frames = getFramecount();
+	run("$ffmpeg -hide_banner -loglevel error -stats -i \"$infile\" -pix_fmt yuv420p $stime $etime $extra_args - | $svtvp9 -i stdin -w $h_resolution -h $v_resolution -intra-period $keyspace -fps-num $orig_framerate[0] -fps-denom $orig_framerate[1] -rc $rc_mode -tbr $bitrate -min-qp 0 -max-qp 60 -tune $tune -enc-mode $speed \"$svt_args\" -n $frames -b \"$outfile.ivf\"");
+    }
 
     if ($audio) {
 	print "\n",colored(["magenta"],"Muxing audio"),"\n";
@@ -446,7 +453,6 @@ sub getContent {
 sub getFTm3u8 {
     my $json = getContent('https://api.fishtank.live/v1/live-streams');
 
-    my $cdn = $json->{'loadBalancer'}{'camera-1-4'};
     my $streams = $json->{'liveStreams'};
 
     open(my $fh,'>','playlist.m3u') or die "Could not create playlist.m3u\n";
@@ -459,6 +465,7 @@ sub getFTm3u8 {
 	my $id = $cam->{'id'};
 	my $name = $cam->{'name'};
 	my $suffix = $cam->{'jwt'};
+	my $cdn = $json->{'loadBalancer'}{$id};
 	unless ($suffix){
 	    $suffix = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIzNmU5YzA0Zi02OWU0LTQxZTMtYWY3OC1hZDJkZTNlOGM5ZWYiLCJsaXZlU3RyZWFtSWQiOiJjYW1lcmEtOS00IiwiaWF0IjoxNzUwMDkyNTM2LCJleHAiOjE3NTAxNzg5MzZ9.xQ3mNpY_VV6bd7bzXMGlPiyJB6YOXAXws-ONEWKNtV8';
 	}
@@ -498,8 +505,8 @@ sub getPPVm3u8 {
 sub getPlaylists {
     getFTm3u8;
     print "Saving FT playlist as: playlist.m3u\n";
-    getPPVm3u8;
-    print "Saving PPV playlist as: playlist_ppv.m3u\n";
+    #getPPVm3u8;
+    #print "Saving PPV playlist as: playlist_ppv.m3u\n";
     exit;
 }
 
